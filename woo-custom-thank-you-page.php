@@ -1,174 +1,165 @@
 <?php
 /**
  * Plugin Name: Woo Custom Thank You Page
- * Description: Customize the WooCommerce Thank You page with a default design or redirect to a selected WordPress page. Includes URL check functionality.
- * Version: 1.0
+ * Description: Set a global or product-specific custom Thank You page in WooCommerce.
+ * Version: 1.0.0
  * Author: Mahfuz Hasan
+ * Author URI: https://showrav.com
+ * Plugin URI: https://github.com/khmahfuzhasan/woo-custom-thank-you-page
  */
 
-if (!defined('ABSPATH')) exit;
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 class Woo_Custom_Thank_You_Page {
 
     public function __construct() {
-        add_action('admin_menu', [$this, 'add_settings_menu']);
+        add_action('admin_menu', [$this, 'add_plugin_menu']);
         add_action('admin_init', [$this, 'register_settings']);
-        add_filter('woocommerce_get_checkout_order_received_url', [$this, 'redirect_thankyou_page'], 10, 2);
-        add_action('wp_ajax_check_custom_url', [$this, 'ajax_check_custom_url']);
-        add_action('template_redirect', [$this, 'render_default_thankyou']);
+        add_action('add_meta_boxes', [$this, 'add_product_meta_box']);
+        add_action('save_post_product', [$this, 'save_product_thankyou_page']);
+        add_action('template_redirect', [$this, 'redirect_thankyou_page']);
     }
 
-    public function add_settings_menu() {
+    // Add submenu item to WooCommerce settings menu
+    public function add_plugin_menu() {
         add_submenu_page(
             'woocommerce',
-            'Woo Custom Thank You Page',
-            'Custom Thank You',
-            'manage_options',
+            'Woo Custom Thank You',
+            'Thank You Page',
+            'manage_woocommerce',
             'woo-custom-thank-you',
             [$this, 'settings_page']
         );
     }
 
+    // Register plugin settings
     public function register_settings() {
-        register_setting('woo_custom_thankyou_group', 'woo_thankyou_use_default');
-        register_setting('woo_custom_thankyou_group', 'woo_thankyou_redirect_page');
-        register_setting('woo_custom_thankyou_group', 'woo_thankyou_custom_url');
-        register_setting('woo_custom_thankyou_group', 'woo_thankyou_message');
+        register_setting('woo_custom_thankyou_settings', 'woo_global_thankyou_redirect_page');
     }
 
+    // Settings page
     public function settings_page() {
         ?>
         <div class="wrap">
-            <h1>Woo Custom Thank You Page Settings</h1>
+            <h1>Woo Custom Thank You Page</h1>
+            <p class="description" style="max-width: 700px; font-size: 14px; color: #555;">
+                Set a <strong>Global Thank You Page</strong> that applies to all products unless a specific Thank You Page is selected at the product level. This allows you to have either a unified experience for all customers or a tailored message per product.
+            </p>
             <form method="post" action="options.php">
                 <?php
-                settings_fields('woo_custom_thankyou_group');
-                do_settings_sections('woo_custom_thankyou_group');
-
-                $use_default = get_option('woo_thankyou_use_default', 'yes');
-                $redirect_page = get_option('woo_thankyou_redirect_page');
-                $custom_url = get_option('woo_thankyou_custom_url');
-                $custom_message = get_option('woo_thankyou_message', 'Thank you for your purchase!');
+                settings_fields('woo_custom_thankyou_settings');
+                do_settings_sections('woo_custom_thankyou_settings');
                 ?>
-
                 <table class="form-table">
                     <tr valign="top">
-                        <th scope="row">Use Default Thank You Page?</th>
+                        <th scope="row">
+                            <label for="woo_global_thankyou_redirect_page">
+                                Global Thank You Page
+                                <span class="dashicons dashicons-editor-help" id="help-tip-global-thankyou" title="This page will be used after checkout unless a product-specific thank you page is defined."></span>
+                            </label>
+                        </th>
                         <td>
-                            <input type="checkbox" name="woo_thankyou_use_default" value="yes" <?php checked('yes', $use_default); ?> />
-                        </td>
-                    </tr>
-
-                    <tr valign="top">
-                        <th scope="row">Select Redirect Page</th>
-                        <td>
-                            <select name="woo_thankyou_redirect_page">
+                            <select name="woo_global_thankyou_redirect_page">
                                 <option value="">-- Select Page --</option>
                                 <?php
-                                $pages = get_pages();
-                                foreach ($pages as $page) {
-                                    echo '<option value="' . $page->ID . '" ' . selected($redirect_page, $page->ID, false) . '>' . $page->post_title . '</option>';
+                                $selected = get_option('woo_global_thankyou_redirect_page');
+                                foreach (get_pages() as $page) {
+                                    printf(
+                                        '<option value="%s" %s>%s</option>',
+                                        $page->ID,
+                                        selected($selected, $page->ID, false),
+                                        esc_html($page->post_title)
+                                    );
                                 }
                                 ?>
                             </select>
                         </td>
                     </tr>
-
-                    <tr valign="top">
-                        <th scope="row">Custom Thank You URL</th>
-                        <td>
-                            <input type="text" id="woo_thankyou_custom_url" name="woo_thankyou_custom_url" value="<?php echo esc_attr($custom_url); ?>" />
-                            <button type="button" id="check_url_btn" class="button">Check URL</button>
-                            <p id="url_check_result"></p>
-                        </td>
-                    </tr>
-
-                    <tr valign="top">
-                        <th scope="row">Custom Message (for Default Page)</th>
-                        <td>
-                            <textarea name="woo_thankyou_message" rows="4" cols="50"><?php echo esc_textarea($custom_message); ?></textarea>
-                        </td>
-                    </tr>
                 </table>
-
                 <?php submit_button(); ?>
             </form>
         </div>
-
-        <script>
-        document.getElementById('check_url_btn').addEventListener('click', function () {
-            var url = document.getElementById('woo_thankyou_custom_url').value;
-            var result = document.getElementById('url_check_result');
-
-            result.textContent = 'Checking...';
-
-            fetch(ajaxurl + '?action=check_custom_url&url=' + encodeURIComponent(url))
-                .then(res => res.json())
-                .then(data => {
-                    if (data.exists) {
-                        result.style.color = 'red';
-                        result.textContent = 'This URL is already used by another page.';
-                    } else {
-                        result.style.color = 'green';
-                        result.textContent = 'URL is available!';
-                    }
-                });
-        });
-        </script>
         <?php
     }
 
-    public function ajax_check_custom_url() {
-        $url = isset($_GET['url']) ? sanitize_text_field($_GET['url']) : '';
-        $exists = false;
+    // Add custom meta box to the product page for setting a specific Thank You page
+    public function add_product_meta_box() {
+        add_meta_box(
+            'woo_product_thankyou_page',
+            'Thank You Page Redirect',
+            [$this, 'render_product_meta_box'],
+            'product',
+            'side',
+            'default'
+        );
+    }
 
-        if ($url) {
-            $pages = get_pages();
-            foreach ($pages as $page) {
-                if (urldecode($url) === trim(urldecode(get_page_uri($page)))) {
-                    $exists = true;
-                    break;
-                }
+    // Render product-level meta box for selecting a Thank You page
+    public function render_product_meta_box($post) {
+        wp_nonce_field('woo_save_product_thankyou', 'woo_thankyou_nonce');
+        $selected = get_post_meta($post->ID, '_woo_product_thankyou_page', true);
+        echo '<label for="woo_product_thankyou_page">Select a Thank You Page:</label><br />';
+        echo '<select name="woo_product_thankyou_page" id="woo_product_thankyou_page">
+                <option value="">-- Default (Global) --</option>';
+        foreach (get_pages() as $page) {
+            printf(
+                '<option value="%s" %s>%s</option>',
+                $page->ID,
+                selected($selected, $page->ID, false),
+                esc_html($page->post_title)
+            );
+        }
+        echo '</select>';
+    }
+
+    // Save product-specific Thank You page setting
+    public function save_product_thankyou_page($post_id) {
+        if (!isset($_POST['woo_thankyou_nonce']) || !wp_verify_nonce($_POST['woo_thankyou_nonce'], 'woo_save_product_thankyou')) return;
+        if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+        if (!current_user_can('edit_post', $post_id)) return;
+
+        if (isset($_POST['woo_product_thankyou_page'])) {
+            update_post_meta($post_id, '_woo_product_thankyou_page', sanitize_text_field($_POST['woo_product_thankyou_page']));
+        }
+    }
+
+    // Redirect to the custom Thank You page after checkout
+    public function redirect_thankyou_page() {
+        if (!is_order_received_page()) return;
+
+        $order_id = absint(get_query_var('order-received'));
+        $order = wc_get_order($order_id);
+        if (!$order) return;
+
+        // Check if there's a product-specific Thank You page
+        foreach ($order->get_items() as $item) {
+            $product_id = $item->get_product_id();
+            $custom_page_id = get_post_meta($product_id, '_woo_product_thankyou_page', true);
+            if ($custom_page_id) {
+                wp_redirect(get_permalink($custom_page_id));
+                exit;
             }
         }
 
-        wp_send_json(['exists' => $exists]);
-    }
-
-    public function redirect_thankyou_page($url, $order) {
-        if ('yes' === get_option('woo_thankyou_use_default')) {
-            $custom_url = trim(get_option('woo_thankyou_custom_url'));
-            if (!empty($custom_url)) {
-                return home_url('/' . untrailingslashit($custom_url));
-            } else {
-                return home_url('/woo-custom-thank-you?order=' . $order->get_id());
-            }
-        } else {
-            $page_id = get_option('woo_thankyou_redirect_page');
-            if (!empty($page_id)) {
-                return get_permalink($page_id);
-            }
-        }
-
-        return $url;
-    }
-
-    public function render_default_thankyou() {
-        if (is_page() || is_admin()) return;
-
-        if (isset($_GET['order']) && strpos($_SERVER['REQUEST_URI'], 'woo-custom-thank-you') !== false) {
-            $message = get_option('woo_thankyou_message', 'Thank you for your order!');
-            wp_head();
-            echo '<!DOCTYPE html><html><head><title>Thank You</title></head><body style="text-align:center;padding:80px;font-family:sans-serif;background:#f9f9f9;">';
-            echo '<div style="max-width:600px;margin:auto;background:#fff;padding:40px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);">';
-            echo '<h1 style="color:#28a745;">Thank You!</h1>';
-            echo '<p style="font-size:18px;">' . esc_html($message) . '</p>';
-            echo '<a href="' . home_url() . '" style="display:inline-block;margin-top:20px;padding:10px 20px;background:#0073aa;color:#fff;text-decoration:none;border-radius:5px;">Continue Shopping</a>';
-            echo '</div></body></html>';
-            wp_footer();
+        // If no product-specific page, use the global Thank You page
+        $global_page_id = get_option('woo_global_thankyou_redirect_page');
+        if ($global_page_id) {
+            wp_redirect(get_permalink($global_page_id));
             exit;
         }
     }
 }
 
+// Initialize the plugin class
 new Woo_Custom_Thank_You_Page();
+
+// Add settings link on plugin page in /wp-admin/plugins.php
+add_filter('plugin_action_links_' . plugin_basename(__FILE__), function($links) {
+    // Add the "Settings" link that directs to the plugin's settings page
+    $settings_link = '<a href="' . esc_url(admin_url('admin.php?page=woo-custom-thank-you')) . '">Settings</a>';
+    array_unshift($links, $settings_link); // Ensure the link appears first
+    return $links;
+});
+
